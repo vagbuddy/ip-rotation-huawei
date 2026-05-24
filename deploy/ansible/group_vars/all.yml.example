@@ -1,0 +1,12 @@
+app_name: ip-rotation-rpi
+app_service_name: ip-rotation-rpi
+app_user: iprotation
+app_group: iprotation
+app_dir: /opt/ip-rotation-rpi
+app_venv_dir: /opt/ip-rotation-rpi/.venv
+app_host: 0.0.0.0
+app_port: 8000
+
+router_ip: 192.168.1.1
+router_login: admin
+router_password: ""

@@ -1,0 +1,18 @@
+# Health check
+
+GET http://127.0.0.1:8000/health
+Accept: application/json
+
+###
+
+# Public IP
+
+GET http://127.0.0.1:8000/public-ip
+Accept: application/json
+
+###
+
+# Rotate the connection
+
+GET http://127.0.0.1:8000/rotate
+Accept: application/json

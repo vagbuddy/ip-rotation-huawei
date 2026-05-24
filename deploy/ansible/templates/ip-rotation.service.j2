@@ -1,0 +1,17 @@
+[Unit]
+Description=Huawei B818 Control Panel
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User={{ app_user }}
+Group={{ app_group }}
+WorkingDirectory={{ app_dir }}
+ExecStart={{ app_venv_dir }}/bin/python {{ app_dir }}/main.py
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
