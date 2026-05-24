@@ -1,3 +1,4 @@
+import ipaddress
 import time
 
 import requests
@@ -12,6 +13,9 @@ APP_CONFIG = load_config()
 ROUTER_URL = APP_CONFIG.router_url
 
 PUBLIC_IP_TIMEOUT_SECONDS = 5
+PUBLIC_IP_RETRY_ATTEMPTS = 3
+PUBLIC_IP_RETRY_DELAY_SECONDS = 2
+PUBLIC_IP_URL = "https://ifconfig.me/ip"
 ROUTER_READY_TIMEOUT_SECONDS = 180
 ROUTER_READY_POLL_INTERVAL_SECONDS = 5
 
@@ -101,12 +105,33 @@ def health():
 def public_ip():
     """Return the current public IP address."""
 
-    try:
-        response = requests.get("https://ifconfig.me", timeout=PUBLIC_IP_TIMEOUT_SECONDS)
-        response.raise_for_status()
-        return {"public_ip": response.text.strip()}
-    except Exception as exc:
-        raise HTTPException(status_code=503, detail=f"Не удалось определить IP: {exc}") from exc
+    last_error: Exception | None = None
+
+    for attempt in range(1, PUBLIC_IP_RETRY_ATTEMPTS + 1):
+        try:
+            response = requests.get(
+                PUBLIC_IP_URL,
+                timeout=PUBLIC_IP_TIMEOUT_SECONDS,
+                headers={"Accept": "text/plain"},
+            )
+            response.raise_for_status()
+
+            public_ip = response.text.strip()
+            if not public_ip:
+                raise ValueError("Пустой ответ от сервиса определения IP.")
+
+            try:
+                ipaddress.ip_address(public_ip)
+            except ValueError as exc:
+                raise ValueError(f"Сервис определения IP вернул некорректный адрес: {public_ip!r}") from exc
+
+            return {"public_ip": public_ip}
+        except Exception as exc:
+            last_error = exc
+            if attempt < PUBLIC_IP_RETRY_ATTEMPTS:
+                time.sleep(PUBLIC_IP_RETRY_DELAY_SECONDS)
+
+    raise HTTPException(status_code=503, detail=f"Не удалось определить IP: {last_error}")
 
 
 @app.get("/rotate", summary="Выполнить ротацию соединения")
