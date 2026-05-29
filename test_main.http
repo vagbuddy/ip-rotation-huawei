@@ -5,9 +5,37 @@ Accept: application/json
 
 ###
 
+# Router status
+
+GET http://127.0.0.1:8000/status
+Accept: application/json
+
+###
+
 # Public IP
 
 GET http://127.0.0.1:8000/public-ip
+Accept: application/json
+
+###
+
+# Switch to 3G
+
+GET http://127.0.0.1:8000/mode/3g
+Accept: application/json
+
+###
+
+# Switch to 4G
+
+GET http://127.0.0.1:8000/mode/4g
+Accept: application/json
+
+###
+
+# Reboot the router
+
+GET http://127.0.0.1:8000/reboot
 Accept: application/json
 
 ###

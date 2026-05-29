@@ -101,6 +101,16 @@ def health():
         raise HTTPException(status_code=503, detail=f"Роутер недоступен: {exc}") from exc
 
 
+@app.get("/status", summary="Получить статус роутера")
+def status():
+    """Return the current router monitoring status."""
+
+    try:
+        return {"router_status": _read_router_status()}
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"Роутер недоступен: {exc}") from exc
+
+
 @app.get("/public-ip", summary="Узнать внешний IP")
 def public_ip():
     """Return the current public IP address."""
@@ -132,6 +142,22 @@ def public_ip():
                 time.sleep(PUBLIC_IP_RETRY_DELAY_SECONDS)
 
     raise HTTPException(status_code=503, detail=f"Не удалось определить IP: {last_error}")
+
+
+@app.get("/mode/{mode}", summary="Переключить режим сети")
+def mode(mode: str):
+    """Set the router network mode to 3G or 4G."""
+
+    _set_network_mode(mode)
+    return {"status": "ok", "network_mode": mode.lower()}
+
+
+@app.get("/reboot", summary="Перезагрузить роутер")
+def reboot():
+    """Reboot the router through the Huawei API."""
+
+    _reboot_router()
+    return {"status": "rebooting"}
 
 
 @app.get("/rotate", summary="Выполнить ротацию соединения")
