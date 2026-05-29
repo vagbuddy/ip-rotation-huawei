@@ -5,6 +5,13 @@ Accept: application/json
 
 ###
 
+# Dashboard UI
+
+GET http://127.0.0.1:8000/
+Accept: text/html
+
+###
+
 # Router status
 
 GET http://127.0.0.1:8000/status
@@ -36,6 +43,27 @@ Accept: application/json
 # Reboot the router
 
 GET http://127.0.0.1:8000/reboot
+Accept: application/json
+
+###
+
+# Mobile data on
+
+GET http://127.0.0.1:8000/mobile-data/on
+Accept: application/json
+
+###
+
+# Mobile data off
+
+GET http://127.0.0.1:8000/mobile-data/off
+Accept: application/json
+
+###
+
+# Reconnect the router
+
+GET http://127.0.0.1:8000/reconnect
 Accept: application/json
 
 ###

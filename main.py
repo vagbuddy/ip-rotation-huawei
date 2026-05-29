@@ -1,10 +1,15 @@
 import ipaddress
 import time
+from functools import lru_cache
+from pathlib import Path
 
 import requests
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
 from huawei_lte_api.Client import Client
 from huawei_lte_api.Connection import Connection
+from huawei_lte_api.enums.device import ControlModeEnum
 
 from config import load_config
 
@@ -25,6 +30,27 @@ NETWORK_MODES = {
 }
 
 app = FastAPI(title="Huawei B818 Control Panel")
+
+DASHBOARD_STATIC_DIR = Path(__file__).resolve().parent / "static"
+DASHBOARD_HTML_PATH = Path(__file__).resolve().parent / "templates" / "dashboard.html"
+
+app.mount("/static", StaticFiles(directory=DASHBOARD_STATIC_DIR), name="static")
+
+
+@lru_cache(maxsize=1)
+def _load_dashboard_html() -> str:
+    """Load the dashboard HTML page from disk."""
+
+    if not DASHBOARD_HTML_PATH.exists():
+        raise HTTPException(status_code=500, detail="Dashboard HTML file is missing.")
+
+    return DASHBOARD_HTML_PATH.read_text(encoding="utf-8")
+
+
+def _render_dashboard() -> HTMLResponse:
+    """Return the dashboard HTML page."""
+
+    return HTMLResponse(_load_dashboard_html())
 
 
 def _read_router_status():
@@ -56,14 +82,37 @@ def _set_network_mode(mode: str) -> None:
 
 
 def _reboot_router() -> None:
-    """Reboot the router through the Huawei API."""
+    """Reboot the router through the modern Huawei API."""
 
     try:
         with Connection(ROUTER_URL) as connection:
             client = Client(connection)
-            client.device.reboot()
+            client.device.set_control(ControlModeEnum.REBOOT)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Ошибка перезагрузки роутера: {exc}") from exc
+
+
+def _set_mobile_data(enabled: bool) -> None:
+    """Enable or disable the router mobile data switch."""
+
+    try:
+        with Connection(ROUTER_URL) as connection:
+            client = Client(connection)
+            client.dial_up.set_mobile_dataswitch(1 if enabled else 0)
+    except Exception as exc:
+        action = "включения" if enabled else "выключения"
+        raise HTTPException(status_code=500, detail=f"Ошибка {action} mobile data: {exc}") from exc
+
+
+def _reconnect_router() -> None:
+    """Ask the router to reconnect its network session."""
+
+    try:
+        with Connection(ROUTER_URL) as connection:
+            client = Client(connection)
+            client.net.reconnect()
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Ошибка переподключения роутера: {exc}") from exc
 
 
 def _wait_for_router_health(
@@ -99,6 +148,13 @@ def health():
         return {"status": "ok"}
     except Exception as exc:
         raise HTTPException(status_code=503, detail=f"Роутер недоступен: {exc}") from exc
+
+
+@app.get("/", include_in_schema=False, response_class=HTMLResponse)
+def dashboard():
+    """Render the local control dashboard."""
+
+    return _render_dashboard()
 
 
 @app.get("/status", summary="Получить статус роутера")
@@ -144,6 +200,22 @@ def public_ip():
     raise HTTPException(status_code=503, detail=f"Не удалось определить IP: {last_error}")
 
 
+@app.get("/mobile-data/on", summary="Включить mobile data")
+def mobile_data_on():
+    """Enable the router mobile data switch."""
+
+    _set_mobile_data(True)
+    return {"status": "ok", "mobile_data": "on"}
+
+
+@app.get("/mobile-data/off", summary="Выключить mobile data")
+def mobile_data_off():
+    """Disable the router mobile data switch."""
+
+    _set_mobile_data(False)
+    return {"status": "ok", "mobile_data": "off"}
+
+
 @app.get("/mode/{mode}", summary="Переключить режим сети")
 def mode(mode: str):
     """Set the router network mode to 3G or 4G."""
@@ -157,7 +229,15 @@ def reboot():
     """Reboot the router through the Huawei API."""
 
     _reboot_router()
-    return {"status": "rebooting"}
+    return {"status": "rebooting", "method": "device.set_control(REBOOT)"}
+
+
+@app.get("/reconnect", summary="Переподключить сеть")
+def reconnect():
+    """Reconnect the router network session."""
+
+    _reconnect_router()
+    return {"status": "ok", "action": "reconnect"}
 
 
 @app.get("/rotate", summary="Выполнить ротацию соединения")
