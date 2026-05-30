@@ -1,6 +1,9 @@
 .env
 .env.*
+!.env.example
 .idea/
 __pycache__/
 *.py[cod]
 .venv/
+*.retry
+deploy/ansible/host_vars/

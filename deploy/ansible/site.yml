@@ -13,8 +13,8 @@
           - router_password is defined
           - router_password | length > 0
         fail_msg: >-
-          Set router_password in deploy/ansible/group_vars/all.yml or pass it
-          with --extra-vars.
+          Set router_password via a local wrapper, .env, or pass it with
+          --extra-vars.
 
   tasks:
     - name: Install runtime packages
@@ -58,6 +58,8 @@
         - main.py
         - config.py
         - requirements.txt
+        - static
+        - templates
       notify: Restart application
 
     - name: Create Python virtual environment
