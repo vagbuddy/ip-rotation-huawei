@@ -1,6 +1,7 @@
 const ACTIONS = [
   { id: "status", title: "status", hint: "GET /status", input: "не требуется", endpoint: "/status", placeholder: "Здесь появится JSON-ответ" },
   { id: "public-ip", title: "public-ip", hint: "GET /public-ip", input: "не требуется", endpoint: "/public-ip", placeholder: "Здесь появится внешний IP" },
+  { id: "rotate", title: "rotate ip", hint: "GET /rotate", input: "асинхронно", endpoint: "/rotate", placeholder: "Ответ запуска: rotating. Финал смотри в /status" },
   { id: "mode-3g", title: "set-mode 3g", hint: "GET /mode/3g", input: "3g", endpoint: "/mode/3g", placeholder: "Ответ после переключения режима" },
   { id: "mode-4g", title: "set-mode 4g", hint: "GET /mode/4g", input: "4g", endpoint: "/mode/4g", placeholder: "Ответ после переключения режима" },
   { id: "mobile-on", title: "mobile-data on", hint: "GET /mobile-data/on", input: "1", endpoint: "/mobile-data/on", placeholder: "Ответ после включения mobile data" },

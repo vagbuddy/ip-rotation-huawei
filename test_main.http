@@ -69,6 +69,7 @@ Accept: application/json
 ###
 
 # Rotate the connection
+# /rotate returns immediately with {"status":"rotating"}; check /status for the final result.
 
 GET http://127.0.0.1:8000/rotate
 Accept: application/json
