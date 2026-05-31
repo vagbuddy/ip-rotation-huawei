@@ -28,6 +28,16 @@
 
       <div class="note">Если роутер недоступен, ошибка появится прямо в поле результата.</div>
     </section>
+
+    <section class="panel log-panel">
+      <div class="section-head">
+        <h2>Rotate log</h2>
+        <p>Только факт последних вызовов `/rotate`.</p>
+      </div>
+
+      <div id="rotate-log-empty" class="log-empty">Пока никто не дергал `/rotate`.</div>
+      <ul id="rotate-log" class="log-list" aria-live="polite"></ul>
+    </section>
   </main>
   <script defer src="/static/dashboard.js"></script>
 </body>

@@ -10,6 +10,11 @@ const ACTIONS = [
   { id: "reboot", title: "reboot (modern)", hint: "GET /reboot", input: "ControlModeEnum.REBOOT", endpoint: "/reboot", placeholder: "Ответ после отправки команды reboot" },
 ];
 
+const ROTATE_LOG_ENDPOINT = "/rotate-log";
+const ROTATE_LOG_POLL_INTERVAL_MS = 3000;
+
+let rotateLogSignature = "";
+
 function escapeHtml(value) {
   return String(value)
     .replaceAll("&", "&amp;")
@@ -47,9 +52,71 @@ function formatResponse(text) {
   }
 }
 
+function formatRotateLogTimestamp(timestamp) {
+  const parsedTimestamp = new Date(timestamp);
+  if (Number.isNaN(parsedTimestamp.getTime())) {
+    return timestamp;
+  }
+
+  return parsedTimestamp.toLocaleString("ru-RU", {
+    hour12: false,
+  });
+}
+
+function buildRotateLogSignature(events) {
+  return events.map((event) => String(event.timestamp || "")).join("|");
+}
+
+function renderRotateLog(events) {
+  const emptyState = document.getElementById("rotate-log-empty");
+  const logList = document.getElementById("rotate-log");
+
+  if (!events.length) {
+    emptyState.hidden = false;
+    logList.innerHTML = "";
+    return;
+  }
+
+  emptyState.hidden = true;
+  logList.innerHTML = events.map((event) => `
+    <li class="log-entry">
+      <span class="log-entry-time">${escapeHtml(formatRotateLogTimestamp(event.timestamp || ""))}</span>
+      <span class="log-entry-label">rotate</span>
+    </li>
+  `).join("");
+}
+
+async function loadRotateLog() {
+  try {
+    const response = await fetch(ROTATE_LOG_ENDPOINT, {
+      headers: {
+        Accept: "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      return;
+    }
+
+    const payload = await response.json();
+    const events = Array.isArray(payload.events) ? payload.events : [];
+    const nextSignature = buildRotateLogSignature(events);
+
+    if (nextSignature === rotateLogSignature) {
+      return;
+    }
+
+    rotateLogSignature = nextSignature;
+    renderRotateLog(events);
+  } catch (error) {
+    // Keep the last successfully rendered log state.
+  }
+}
+
 async function runAction(endpoint, resultId, button) {
   const resultBox = document.getElementById(resultId);
   const previousLabel = button.textContent;
+  const shouldRefreshRotateLog = endpoint === "/rotate";
 
   button.disabled = true;
   button.textContent = "...";
@@ -76,7 +143,13 @@ async function runAction(endpoint, resultId, button) {
   } finally {
     button.disabled = false;
     button.textContent = previousLabel;
+
+    if (shouldRefreshRotateLog) {
+      void loadRotateLog();
+    }
   }
 }
 
 renderRows();
+void loadRotateLog();
+window.setInterval(loadRotateLog, ROTATE_LOG_POLL_INTERVAL_MS);

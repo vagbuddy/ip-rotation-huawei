@@ -1,6 +1,7 @@
 import ipaddress
 import threading
 import time
+from collections import deque
 from dataclasses import asdict, dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -29,6 +30,7 @@ ROTATE_HEALTH_TIMEOUT_SECONDS = 60
 ROTATE_HEALTH_POLL_INTERVAL_SECONDS = 5
 ROUTER_READY_TIMEOUT_SECONDS = 180
 ROUTER_READY_POLL_INTERVAL_SECONDS = 5
+ROTATE_LOG_LIMIT = 20
 
 ROTATE_STATE_IDLE = "idle"
 ROTATE_STATE_ROTATING = "rotating"
@@ -61,8 +63,17 @@ class RotateStatus:
     error: str | None = None
 
 
+@dataclass(frozen=True)
+class RotateLogEntry:
+    """Single in-memory record that the rotate endpoint was invoked."""
+
+    timestamp: str
+
+
 ROTATE_STATUS_LOCK = threading.Lock()
 ROTATE_STATUS = RotateStatus()
+ROTATE_LOG_LOCK = threading.Lock()
+ROTATE_LOG: deque[RotateLogEntry] = deque(maxlen=ROTATE_LOG_LIMIT)
 
 
 @lru_cache(maxsize=1)
@@ -108,6 +119,20 @@ def _update_rotate_status(**updates: str | None) -> None:
     with ROTATE_STATUS_LOCK:
         for key, value in updates.items():
             setattr(ROTATE_STATUS, key, value)
+
+
+def _record_rotate_event() -> None:
+    """Record that the rotate endpoint was invoked."""
+
+    with ROTATE_LOG_LOCK:
+        ROTATE_LOG.appendleft(RotateLogEntry(timestamp=_current_timestamp()))
+
+
+def _get_rotate_log_snapshot() -> list[dict[str, str]]:
+    """Return recent rotate endpoint invocation records."""
+
+    with ROTATE_LOG_LOCK:
+        return [asdict(entry) for entry in ROTATE_LOG]
 
 
 def _get_public_ip() -> str:
@@ -364,6 +389,13 @@ def status():
     }
 
 
+@app.get("/rotate-log", summary="Получить лог вызовов rotate")
+def rotate_log():
+    """Return recent rotate endpoint invocation records."""
+
+    return {"events": _get_rotate_log_snapshot()}
+
+
 @app.get("/public-ip", summary="Узнать внешний IP")
 def public_ip():
     """Return the current public IP address."""
@@ -415,6 +447,7 @@ def reconnect():
 def rotate():
     """Start the rotation workflow and return immediately."""
 
+    _record_rotate_event()
     _start_rotate_sequence()
     return {"status": "rotating"}
 
