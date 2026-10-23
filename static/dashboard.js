@@ -1,5 +1,6 @@
 const ACTIONS = [
   { id: "status", title: "status", hint: "GET /status", input: "не требуется", endpoint: "/status", placeholder: "Здесь появится JSON-ответ" },
+  { id: "watchdog", title: "watchdog", hint: "GET /watchdog", input: "не требуется", endpoint: "/watchdog", placeholder: "Здесь появится статус вотчдога интернета" },
   { id: "public-ip", title: "public-ip", hint: "GET /public-ip", input: "не требуется", endpoint: "/public-ip", placeholder: "Здесь появится внешний IP" },
   { id: "rotate", title: "rotate ip", hint: "GET /rotate", input: "асинхронно", endpoint: "/rotate", placeholder: "Ответ запуска: rotating. Финал смотри в /status" },
   { id: "mode-3g", title: "set-mode 3g", hint: "GET /mode/3g", input: "3g", endpoint: "/mode/3g", placeholder: "Ответ после переключения режима" },

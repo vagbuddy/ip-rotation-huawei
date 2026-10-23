@@ -12,6 +12,11 @@ DEFAULT_ROUTER_LOGIN = "admin"
 DEFAULT_APP_HOST = "0.0.0.0"
 DEFAULT_APP_PORT = 8000
 
+DEFAULT_WATCHDOG_ENABLED = True
+DEFAULT_WATCHDOG_TIMEOUT_SECONDS = 900
+DEFAULT_WATCHDOG_CHECK_INTERVAL_SECONDS = 30
+DEFAULT_WATCHDOG_REBOOT_COOLDOWN_SECONDS = 300
+
 
 def _load_dotenv_file() -> None:
     """Load key-value pairs from a local .env file if it exists."""
@@ -92,6 +97,33 @@ def _read_int_env(name: str, default: int) -> int:
         raise RuntimeError(f"Environment variable {name} must be an integer.") from exc
 
 
+def _read_bool_env(name: str, default: bool) -> bool:
+    """Return a boolean environment variable or a default.
+
+    Args:
+        name: Environment variable name.
+        default: Fallback value when the variable is not set.
+
+    Returns:
+        Parsed boolean value.
+
+    Raises:
+        RuntimeError: If the value cannot be parsed as a boolean.
+    """
+
+    raw_value = os.getenv(name)
+    if raw_value is None or not raw_value.strip():
+        return default
+
+    lowered = raw_value.strip().lower()
+    if lowered in {"1", "true", "yes", "on"}:
+        return True
+    if lowered in {"0", "false", "no", "off"}:
+        return False
+
+    raise RuntimeError(f"Environment variable {name} must be a boolean.")
+
+
 @dataclass(frozen=True)
 class AppConfig:
     """Application settings loaded from environment variables."""
@@ -101,6 +133,10 @@ class AppConfig:
     router_password: str
     app_host: str
     app_port: int
+    watchdog_enabled: bool = DEFAULT_WATCHDOG_ENABLED
+    watchdog_timeout_seconds: int = DEFAULT_WATCHDOG_TIMEOUT_SECONDS
+    watchdog_check_interval_seconds: int = DEFAULT_WATCHDOG_CHECK_INTERVAL_SECONDS
+    watchdog_reboot_cooldown_seconds: int = DEFAULT_WATCHDOG_REBOOT_COOLDOWN_SECONDS
 
     @property
     def router_url(self) -> str:
@@ -123,4 +159,12 @@ def load_config() -> AppConfig:
         router_password=_read_env("ROUTER_PASSWORD"),
         app_host=_read_env("APP_HOST", DEFAULT_APP_HOST),
         app_port=_read_int_env("APP_PORT", DEFAULT_APP_PORT),
+        watchdog_enabled=_read_bool_env("WATCHDOG_ENABLED", DEFAULT_WATCHDOG_ENABLED),
+        watchdog_timeout_seconds=_read_int_env("WATCHDOG_TIMEOUT_SECONDS", DEFAULT_WATCHDOG_TIMEOUT_SECONDS),
+        watchdog_check_interval_seconds=_read_int_env(
+            "WATCHDOG_CHECK_INTERVAL_SECONDS", DEFAULT_WATCHDOG_CHECK_INTERVAL_SECONDS
+        ),
+        watchdog_reboot_cooldown_seconds=_read_int_env(
+            "WATCHDOG_REBOOT_COOLDOWN_SECONDS", DEFAULT_WATCHDOG_REBOOT_COOLDOWN_SECONDS
+        ),
     )

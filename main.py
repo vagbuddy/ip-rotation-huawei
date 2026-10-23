@@ -1,4 +1,6 @@
+from contextlib import asynccontextmanager
 import ipaddress
+import logging
 import threading
 import time
 from collections import deque
@@ -16,7 +18,10 @@ from huawei_lte_api.Connection import Connection
 from huawei_lte_api.enums.device import ControlModeEnum
 
 from config import load_config
+from watchdog import WatchdogService, check_internet_connectivity
 
+
+logger = logging.getLogger(__name__)
 
 APP_CONFIG = load_config()
 ROUTER_URL = APP_CONFIG.router_url
@@ -42,12 +47,8 @@ NETWORK_MODES = {
     "4g": ("03", "3FFFFFFF", "7FFFFFFFFFFFFFFF"),
 }
 
-app = FastAPI(title="Huawei B818 Control Panel")
-
 DASHBOARD_STATIC_DIR = Path(__file__).resolve().parent / "static"
 DASHBOARD_HTML_PATH = Path(__file__).resolve().parent / "templates" / "dashboard.html"
-
-app.mount("/static", StaticFiles(directory=DASHBOARD_STATIC_DIR), name="static")
 
 
 @dataclass
@@ -98,6 +99,74 @@ def _read_router_status():
     with Connection(ROUTER_URL) as connection:
         client = Client(connection)
         return client.monitoring.status()
+
+
+def _reboot_router() -> None:
+    """Reboot the router through the modern Huawei API."""
+
+    try:
+        with Connection(ROUTER_URL) as connection:
+            client = Client(connection)
+            client.device.set_control(ControlModeEnum.REBOOT)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Ошибка перезагрузки роутера: {exc}") from exc
+
+
+def _is_rotating() -> bool:
+    """Return whether an IP rotation workflow is actively running."""
+
+    with ROTATE_STATUS_LOCK:
+        return ROTATE_STATUS.state == ROTATE_STATE_ROTATING
+
+
+def _check_connectivity() -> bool:
+    """Check internet connectivity using both router WAN status and external probes.
+
+    Returns:
+        True if the router reports active cellular WAN and external probe succeeds.
+    """
+
+    try:
+        router_status = _read_router_status()
+        conn_status = str(router_status.get("ConnectionStatus", ""))
+        wan_ip = router_status.get("WanIPAddress")
+        if conn_status != "901" or not wan_ip:
+            logger.debug(
+                "Router WAN is not connected (ConnectionStatus=%s, WanIP=%s)",
+                conn_status,
+                wan_ip,
+            )
+            return False
+    except Exception as exc:
+        logger.warning("Could not query router status for watchdog check: %s", exc)
+
+    return check_internet_connectivity()
+
+
+WATCHDOG_SERVICE = WatchdogService(
+    enabled=APP_CONFIG.watchdog_enabled,
+    timeout_seconds=APP_CONFIG.watchdog_timeout_seconds,
+    check_interval_seconds=APP_CONFIG.watchdog_check_interval_seconds,
+    reboot_cooldown_seconds=APP_CONFIG.watchdog_reboot_cooldown_seconds,
+    reboot_fn=_reboot_router,
+    is_rotating_fn=_is_rotating,
+    connectivity_checker=_check_connectivity,
+)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Manage background services during application lifecycle."""
+
+    WATCHDOG_SERVICE.start()
+    try:
+        yield
+    finally:
+        WATCHDOG_SERVICE.stop()
+
+
+app = FastAPI(title="Huawei B818 Control Panel", lifespan=lifespan)
+app.mount("/static", StaticFiles(directory=DASHBOARD_STATIC_DIR), name="static")
 
 
 def _current_timestamp() -> str:
@@ -192,17 +261,6 @@ def _set_network_mode(mode: str) -> None:
             )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Ошибка роутера: {exc}") from exc
-
-
-def _reboot_router() -> None:
-    """Reboot the router through the modern Huawei API."""
-
-    try:
-        with Connection(ROUTER_URL) as connection:
-            client = Client(connection)
-            client.device.set_control(ControlModeEnum.REBOOT)
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Ошибка перезагрузки роутера: {exc}") from exc
 
 
 def _set_mobile_data(enabled: bool) -> None:
@@ -367,9 +425,10 @@ def dashboard():
 
 @app.get("/status", summary="Получить статус роутера")
 def status():
-    """Return the current router monitoring status and rotation workflow state."""
+    """Return the current router monitoring status, rotation workflow state, and watchdog info."""
 
     rotation = _get_rotate_status_snapshot()
+    watchdog_status = WATCHDOG_SERVICE.get_status()
 
     try:
         router_status = _read_router_status()
@@ -379,6 +438,7 @@ def status():
                 "router_status": None,
                 "router_error": str(exc),
                 "rotation": rotation,
+                "watchdog": watchdog_status,
             }
 
         raise HTTPException(status_code=503, detail=f"Роутер недоступен: {exc}") from exc
@@ -386,7 +446,15 @@ def status():
     return {
         "router_status": router_status,
         "rotation": rotation,
+        "watchdog": watchdog_status,
     }
+
+
+@app.get("/watchdog", summary="Получить статус вотчдога интернета")
+def watchdog():
+    """Return the current internet connectivity watchdog status."""
+
+    return WATCHDOG_SERVICE.get_status()
 
 
 @app.get("/rotate-log", summary="Получить лог вызовов rotate")
