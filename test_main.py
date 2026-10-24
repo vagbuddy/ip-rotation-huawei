@@ -55,6 +55,38 @@ class RotateLogTests(unittest.TestCase):
 
         self.assertEqual(len(log_response["events"]), 1)
 
+    @patch("main._start_rotate_sequence")
+    def test_rotate_wait_returns_success_when_succeeded(self, start_rotate_sequence) -> None:
+        """Rotate with wait=True should block and return result when rotation succeeds."""
+
+        with main.ROTATE_STATUS_LOCK:
+            main.ROTATE_STATUS.state = main.ROTATE_STATE_SUCCEEDED
+            main.ROTATE_STATUS.public_ip_after = "85.253.112.45"
+        main.ROTATE_FINISHED_EVENT.set()
+
+        response = main.rotate(wait=True)
+
+        self.assertEqual(response["status"], "ok")
+        self.assertEqual(response["action"], "rotate")
+        self.assertEqual(response["public_ip"], "85.253.112.45")
+        start_rotate_sequence.assert_called_once_with()
+
+    @patch("main._start_rotate_sequence")
+    def test_rotate_wait_raises_when_failed(self, start_rotate_sequence) -> None:
+        """Rotate with wait=True should raise 500 when rotation reports failure."""
+
+        with main.ROTATE_STATUS_LOCK:
+            main.ROTATE_STATUS.state = main.ROTATE_STATE_FAILED
+            main.ROTATE_STATUS.message = "Ротация не удалась."
+            main.ROTATE_STATUS.error = "Connection timeout"
+        main.ROTATE_FINISHED_EVENT.set()
+
+        with self.assertRaises(HTTPException) as raised_exception:
+            main.rotate(wait=True)
+
+        self.assertEqual(raised_exception.exception.status_code, 500)
+        self.assertIn("Connection timeout", str(raised_exception.exception.detail))
+
 
 if __name__ == "__main__":
     unittest.main()

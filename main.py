@@ -75,6 +75,8 @@ ROTATE_STATUS_LOCK = threading.Lock()
 ROTATE_STATUS = RotateStatus()
 ROTATE_LOG_LOCK = threading.Lock()
 ROTATE_LOG: deque[RotateLogEntry] = deque(maxlen=ROTATE_LOG_LIMIT)
+ROTATE_FINISHED_EVENT = threading.Event()
+ROTATE_FINISHED_EVENT.set()
 
 
 @lru_cache(maxsize=1)
@@ -101,33 +103,38 @@ def _read_router_status():
         return client.monitoring.status()
 
 
-def _ensure_4g_mode() -> bool:
+def _ensure_4g_mode(retries: int = 5, retry_delay: float = 2.0) -> bool:
     """Ensure the router is set to 4G LTE mode if it got stuck in another mode (e.g. 3G).
 
     Returns:
         True if the mode is 4G (already was or restored), False on communication failure.
     """
 
-    try:
-        with Connection(ROUTER_URL) as connection:
-            client = Client(connection)
-            current_mode = client.net.net_mode()
-            if current_mode.get("NetworkMode") != "03":
-                logger.warning(
-                    "Router is in mode %s (not 4G LTE); restoring 4G mode.",
-                    current_mode.get("NetworkMode"),
-                )
-                network_mode, network_band, lte_band = NETWORK_MODES["4g"]
-                client.net.set_net_mode(
-                    networkmode=network_mode,
-                    networkband=network_band,
-                    lteband=lte_band,
-                )
+    for attempt in range(1, retries + 1):
+        try:
+            with Connection(ROUTER_URL) as connection:
+                client = Client(connection)
+                current_mode = client.net.net_mode()
+                if current_mode.get("NetworkMode") != "03":
+                    logger.warning(
+                        "Router is in mode %s (not 4G LTE); restoring 4G mode (attempt %d/%d).",
+                        current_mode.get("NetworkMode"),
+                        attempt,
+                        retries,
+                    )
+                    network_mode, network_band, lte_band = NETWORK_MODES["4g"]
+                    client.net.set_net_mode(
+                        networkmode=network_mode,
+                        networkband=network_band,
+                        lteband=lte_band,
+                    )
                 return True
-            return True
-    except Exception as exc:
-        logger.warning("Failed to check/restore 4G network mode: %s", exc)
-        return False
+        except Exception as exc:
+            logger.warning("Failed to check/restore 4G network mode (attempt %d/%d): %s", attempt, retries, exc)
+            if attempt < retries:
+                time.sleep(retry_delay)
+
+    return False
 
 
 def _reboot_router() -> None:
@@ -280,24 +287,40 @@ def _get_public_ip() -> str:
     raise HTTPException(status_code=503, detail=f"Не удалось определить IP: {last_error}")
 
 
-def _set_network_mode(mode: str) -> None:
-    """Set the router to the requested network mode."""
+def _set_network_mode(mode: str, retries: int = 3, retry_delay: float = 2.0) -> None:
+    """Set the router to the requested network mode with retries for modem busy states."""
 
     mode_config = NETWORK_MODES.get(mode.lower())
     if mode_config is None:
         raise HTTPException(status_code=400, detail="Используйте 3g или 4g")
 
-    try:
-        with Connection(ROUTER_URL) as connection:
-            client = Client(connection)
-            network_mode, network_band, lte_band = mode_config
-            client.net.set_net_mode(
-                networkmode=network_mode,
-                networkband=network_band,
-                lteband=lte_band,
+    network_mode, network_band, lte_band = mode_config
+    last_error: Exception | None = None
+
+    for attempt in range(1, retries + 1):
+        try:
+            with Connection(ROUTER_URL) as connection:
+                client = Client(connection)
+                client.net.set_net_mode(
+                    networkmode=network_mode,
+                    networkband=network_band,
+                    lteband=lte_band,
+                )
+                logger.info("Successfully set router network mode to %s (attempt %d/%d)", mode, attempt, retries)
+                return
+        except Exception as exc:
+            last_error = exc
+            logger.warning(
+                "Failed to set router network mode to %s (attempt %d/%d): %s",
+                mode,
+                attempt,
+                retries,
+                exc,
             )
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Ошибка роутера: {exc}") from exc
+            if attempt < retries:
+                time.sleep(retry_delay)
+
+    raise HTTPException(status_code=500, detail=f"Ошибка роутера: {last_error}") from last_error
 
 
 def _set_mobile_data(enabled: bool) -> None:
@@ -372,60 +395,62 @@ def _run_rotate_sequence() -> None:
 
     try:
         try:
-            public_ip_before = _get_public_ip()
-            _update_rotate_status(public_ip_before=public_ip_before, message="Переключаемся в 3g.")
+            try:
+                public_ip_before = _get_public_ip()
+                _update_rotate_status(public_ip_before=public_ip_before, message="Переключаемся в 3g.")
 
-            _set_network_mode("3g")
-            switched_to_3g = True
-            _reboot_router()
-            _wait_for_router_health(
-                timeout_seconds=ROTATE_HEALTH_TIMEOUT_SECONDS,
-                poll_interval_seconds=ROTATE_HEALTH_POLL_INTERVAL_SECONDS,
-                initial_delay_seconds=ROTATE_HEALTH_INITIAL_DELAY_SECONDS,
-            )
+                _set_network_mode("3g")
+                switched_to_3g = True
+                _reboot_router()
+                _wait_for_router_health(
+                    timeout_seconds=ROUTER_READY_TIMEOUT_SECONDS,
+                    poll_interval_seconds=ROTATE_HEALTH_POLL_INTERVAL_SECONDS,
+                    initial_delay_seconds=ROTATE_HEALTH_INITIAL_DELAY_SECONDS,
+                )
 
-            _update_rotate_status(message="Возвращаемся в 4g.")
-            _set_network_mode("4g")
-            switched_to_3g = False
-            _wait_for_router_health(
-                timeout_seconds=ROTATE_HEALTH_TIMEOUT_SECONDS,
-                poll_interval_seconds=ROTATE_HEALTH_POLL_INTERVAL_SECONDS,
-            )
+                _update_rotate_status(message="Возвращаемся в 4g.")
+                time.sleep(3)
+                _set_network_mode("4g", retries=5, retry_delay=3.0)
+                switched_to_3g = False
+                _wait_for_router_health(
+                    timeout_seconds=ROUTER_READY_TIMEOUT_SECONDS,
+                    poll_interval_seconds=ROTATE_HEALTH_POLL_INTERVAL_SECONDS,
+                )
 
-            public_ip_after = _get_public_ip()
-            if public_ip_before == public_ip_after:
+                public_ip_after = _get_public_ip()
+                if public_ip_before == public_ip_after:
+                    _update_rotate_status(
+                        state=ROTATE_STATE_FAILED,
+                        finished_at=_current_timestamp(),
+                        public_ip_after=public_ip_after,
+                        message="Внешний IP не изменился после ротации.",
+                        error=None,
+                    )
+                    return
+
                 _update_rotate_status(
-                    state=ROTATE_STATE_FAILED,
+                    state=ROTATE_STATE_SUCCEEDED,
                     finished_at=_current_timestamp(),
                     public_ip_after=public_ip_after,
-                    message="Внешний IP не изменился после ротации.",
+                    message="Ротация завершена.",
                     error=None,
                 )
-                return
-
+            finally:
+                if switched_to_3g:
+                    logger.warning("Recovery: restoring router network mode to 4G after failure during rotation")
+                    if not _ensure_4g_mode(retries=5, retry_delay=3.0):
+                        logger.error("Failed to restore 4G mode during rotation cleanup!")
+        except Exception as exc:
             _update_rotate_status(
-                state=ROTATE_STATE_SUCCEEDED,
+                state=ROTATE_STATE_FAILED,
                 finished_at=_current_timestamp(),
+                public_ip_before=public_ip_before,
                 public_ip_after=public_ip_after,
-                message="Ротация завершена.",
-                error=None,
+                message="Ротация не удалась.",
+                error=str(exc),
             )
-        finally:
-            if switched_to_3g:
-                try:
-                    logger.warning("Recovery: restoring router network mode to 4G after failure in 3G state")
-                    _set_network_mode("4g")
-                except Exception as recovery_exc:
-                    logger.error("Failed to restore 4G network mode: %s", recovery_exc)
-    except Exception as exc:
-        _update_rotate_status(
-            state=ROTATE_STATE_FAILED,
-            finished_at=_current_timestamp(),
-            public_ip_before=public_ip_before,
-            public_ip_after=public_ip_after,
-            message="Ротация не удалась.",
-            error=str(exc),
-        )
+    finally:
+        ROTATE_FINISHED_EVENT.set()
 
 
 def _start_rotate_sequence() -> None:
@@ -449,6 +474,7 @@ def _start_rotate_sequence() -> None:
         ROTATE_STATUS.public_ip_after = None
         ROTATE_STATUS.message = "Ротация запущена."
         ROTATE_STATUS.error = None
+        ROTATE_FINISHED_EVENT.clear()
 
     threading.Thread(target=_run_rotate_sequence, daemon=True).start()
 
@@ -559,13 +585,35 @@ def reconnect():
     return {"status": "ok", "action": "reconnect"}
 
 
-@app.get("/rotate", summary="Запустить ротацию соединения асинхронно")
-def rotate():
-    """Start the rotation workflow and return immediately."""
+@app.get("/rotate", summary="Запустить ротацию соединения")
+def rotate(wait: bool = False):
+    """Start the rotation workflow and return immediately or wait until finished."""
 
     _record_rotate_event()
-    _start_rotate_sequence()
-    return {"status": "rotating"}
+    try:
+        _start_rotate_sequence()
+    except HTTPException as exc:
+        if not (wait and exc.status_code == 409):
+            raise
+
+    if not wait:
+        return {"status": "rotating"}
+
+    finished = ROTATE_FINISHED_EVENT.wait(timeout=120.0)
+    if not finished:
+        raise HTTPException(status_code=504, detail="Таймаут ожидания ротации (120с)")
+
+    snapshot = _get_rotate_status_snapshot()
+    if snapshot.get("state") == ROTATE_STATE_SUCCEEDED:
+        return {
+            "status": "ok",
+            "action": "rotate",
+            "public_ip": snapshot.get("public_ip_after"),
+            "rotation": snapshot,
+        }
+
+    error_msg = snapshot.get("error") or snapshot.get("message") or "Ротация не удалась"
+    raise HTTPException(status_code=500, detail=f"Ротация не удалась: {error_msg}")
 
 
 if __name__ == "__main__":
