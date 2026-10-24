@@ -319,21 +319,58 @@ class MainWatchdogEndpointsTests(unittest.TestCase):
         self.assertIn("watchdog", data)
         self.assertIn("is_online", data["watchdog"])
 
+    @patch("main._ensure_4g_mode")
     @patch("main.check_internet_connectivity")
     @patch("main._read_router_status", return_value={"ConnectionStatus": "902", "WanIPAddress": None})
     def test_check_connectivity_returns_false_when_router_disconnected(
-        self, mock_read_status, mock_probe
+        self, mock_read_status, mock_probe, mock_ensure_4g
     ) -> None:
         self.assertFalse(main._check_connectivity())
         mock_probe.assert_not_called()
+        mock_ensure_4g.assert_called_once()
 
+    @patch("main._ensure_4g_mode")
     @patch("main.check_internet_connectivity", return_value=True)
     @patch("main._read_router_status", return_value={"ConnectionStatus": "901", "WanIPAddress": "10.0.0.1"})
     def test_check_connectivity_probes_when_router_connected(
-        self, mock_read_status, mock_probe
+        self, mock_read_status, mock_probe, mock_ensure_4g
     ) -> None:
         self.assertTrue(main._check_connectivity())
         mock_probe.assert_called_once()
+        mock_ensure_4g.assert_not_called()
+
+    @patch("main.Client")
+    @patch("main.Connection")
+    def test_ensure_4g_mode_switches_when_not_4g(self, mock_conn, mock_client_cls) -> None:
+        mock_client = MagicMock()
+        mock_client.net.net_mode.return_value = {"NetworkMode": "02"}
+        mock_client_cls.return_value = mock_client
+
+        result = main._ensure_4g_mode()
+        self.assertTrue(result)
+        mock_client.net.set_net_mode.assert_called_once_with(
+            networkmode="03",
+            networkband="3FFFFFFF",
+            lteband="7FFFFFFFFFFFFFFF",
+        )
+
+    @patch("main.Client")
+    @patch("main.Connection")
+    def test_ensure_4g_mode_does_nothing_when_already_4g(self, mock_conn, mock_client_cls) -> None:
+        mock_client = MagicMock()
+        mock_client.net.net_mode.return_value = {"NetworkMode": "03"}
+        mock_client_cls.return_value = mock_client
+
+        result = main._ensure_4g_mode()
+        self.assertTrue(result)
+        mock_client.net.set_net_mode.assert_not_called()
+
+    @patch("main._reboot_router")
+    @patch("main._ensure_4g_mode")
+    def test_recover_router_ensures_4g_then_reboots(self, mock_ensure_4g, mock_reboot) -> None:
+        main._recover_router()
+        mock_ensure_4g.assert_called_once()
+        mock_reboot.assert_called_once()
 
 
 if __name__ == "__main__":

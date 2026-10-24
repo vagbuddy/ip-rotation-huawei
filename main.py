@@ -101,6 +101,35 @@ def _read_router_status():
         return client.monitoring.status()
 
 
+def _ensure_4g_mode() -> bool:
+    """Ensure the router is set to 4G LTE mode if it got stuck in another mode (e.g. 3G).
+
+    Returns:
+        True if the mode is 4G (already was or restored), False on communication failure.
+    """
+
+    try:
+        with Connection(ROUTER_URL) as connection:
+            client = Client(connection)
+            current_mode = client.net.net_mode()
+            if current_mode.get("NetworkMode") != "03":
+                logger.warning(
+                    "Router is in mode %s (not 4G LTE); restoring 4G mode.",
+                    current_mode.get("NetworkMode"),
+                )
+                network_mode, network_band, lte_band = NETWORK_MODES["4g"]
+                client.net.set_net_mode(
+                    networkmode=network_mode,
+                    networkband=network_band,
+                    lteband=lte_band,
+                )
+                return True
+            return True
+    except Exception as exc:
+        logger.warning("Failed to check/restore 4G network mode: %s", exc)
+        return False
+
+
 def _reboot_router() -> None:
     """Reboot the router through the modern Huawei API."""
 
@@ -110,6 +139,13 @@ def _reboot_router() -> None:
             client.device.set_control(ControlModeEnum.REBOOT)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Ошибка перезагрузки роутера: {exc}") from exc
+
+
+def _recover_router() -> None:
+    """Watchdog recovery action: ensure 4G mode is restored, then reboot the router."""
+
+    _ensure_4g_mode()
+    _reboot_router()
 
 
 def _is_rotating() -> bool:
@@ -132,9 +168,10 @@ def _check_connectivity() -> bool:
         # ConnectionStatus 901 indicates an active, connected cellular data session
         if conn_status != "901":
             logger.debug(
-                "Router WAN is not connected (ConnectionStatus=%s)",
+                "Router WAN is not connected (ConnectionStatus=%s); checking 4G mode",
                 conn_status,
             )
+            _ensure_4g_mode()
             return False
     except Exception as exc:
         logger.warning("Could not query router status for watchdog check: %s", exc)
@@ -147,7 +184,7 @@ WATCHDOG_SERVICE = WatchdogService(
     timeout_seconds=APP_CONFIG.watchdog_timeout_seconds,
     check_interval_seconds=APP_CONFIG.watchdog_check_interval_seconds,
     reboot_cooldown_seconds=APP_CONFIG.watchdog_reboot_cooldown_seconds,
-    reboot_fn=_reboot_router,
+    reboot_fn=_recover_router,
     is_rotating_fn=_is_rotating,
     connectivity_checker=_check_connectivity,
 )
@@ -157,6 +194,7 @@ WATCHDOG_SERVICE = WatchdogService(
 async def lifespan(app: FastAPI):
     """Manage background services during application lifecycle."""
 
+    _ensure_4g_mode()
     WATCHDOG_SERVICE.start()
     try:
         yield
