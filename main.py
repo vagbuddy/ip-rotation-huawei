@@ -129,12 +129,11 @@ def _check_connectivity() -> bool:
     try:
         router_status = _read_router_status()
         conn_status = str(router_status.get("ConnectionStatus", ""))
-        wan_ip = router_status.get("WanIPAddress")
-        if conn_status != "901" or not wan_ip:
+        # ConnectionStatus 901 indicates an active, connected cellular data session
+        if conn_status != "901":
             logger.debug(
-                "Router WAN is not connected (ConnectionStatus=%s, WanIP=%s)",
+                "Router WAN is not connected (ConnectionStatus=%s)",
                 conn_status,
-                wan_ip,
             )
             return False
     except Exception as exc:
@@ -331,44 +330,55 @@ def _run_rotate_sequence() -> None:
 
     public_ip_before: str | None = None
     public_ip_after: str | None = None
+    switched_to_3g = False
 
     try:
-        public_ip_before = _get_public_ip()
-        _update_rotate_status(public_ip_before=public_ip_before, message="Переключаемся в 3g.")
+        try:
+            public_ip_before = _get_public_ip()
+            _update_rotate_status(public_ip_before=public_ip_before, message="Переключаемся в 3g.")
 
-        _set_network_mode("3g")
-        _reboot_router()
-        _wait_for_router_health(
-            timeout_seconds=ROTATE_HEALTH_TIMEOUT_SECONDS,
-            poll_interval_seconds=ROTATE_HEALTH_POLL_INTERVAL_SECONDS,
-            initial_delay_seconds=ROTATE_HEALTH_INITIAL_DELAY_SECONDS,
-        )
+            _set_network_mode("3g")
+            switched_to_3g = True
+            _reboot_router()
+            _wait_for_router_health(
+                timeout_seconds=ROTATE_HEALTH_TIMEOUT_SECONDS,
+                poll_interval_seconds=ROTATE_HEALTH_POLL_INTERVAL_SECONDS,
+                initial_delay_seconds=ROTATE_HEALTH_INITIAL_DELAY_SECONDS,
+            )
 
-        _update_rotate_status(message="Возвращаемся в 4g.")
-        _set_network_mode("4g")
-        _wait_for_router_health(
-            timeout_seconds=ROTATE_HEALTH_TIMEOUT_SECONDS,
-            poll_interval_seconds=ROTATE_HEALTH_POLL_INTERVAL_SECONDS,
-        )
+            _update_rotate_status(message="Возвращаемся в 4g.")
+            _set_network_mode("4g")
+            switched_to_3g = False
+            _wait_for_router_health(
+                timeout_seconds=ROTATE_HEALTH_TIMEOUT_SECONDS,
+                poll_interval_seconds=ROTATE_HEALTH_POLL_INTERVAL_SECONDS,
+            )
 
-        public_ip_after = _get_public_ip()
-        if public_ip_before == public_ip_after:
+            public_ip_after = _get_public_ip()
+            if public_ip_before == public_ip_after:
+                _update_rotate_status(
+                    state=ROTATE_STATE_FAILED,
+                    finished_at=_current_timestamp(),
+                    public_ip_after=public_ip_after,
+                    message="Внешний IP не изменился после ротации.",
+                    error=None,
+                )
+                return
+
             _update_rotate_status(
-                state=ROTATE_STATE_FAILED,
+                state=ROTATE_STATE_SUCCEEDED,
                 finished_at=_current_timestamp(),
                 public_ip_after=public_ip_after,
-                message="Внешний IP не изменился после ротации.",
+                message="Ротация завершена.",
                 error=None,
             )
-            return
-
-        _update_rotate_status(
-            state=ROTATE_STATE_SUCCEEDED,
-            finished_at=_current_timestamp(),
-            public_ip_after=public_ip_after,
-            message="Ротация завершена.",
-            error=None,
-        )
+        finally:
+            if switched_to_3g:
+                try:
+                    logger.warning("Recovery: restoring router network mode to 4G after failure in 3G state")
+                    _set_network_mode("4g")
+                except Exception as recovery_exc:
+                    logger.error("Failed to restore 4G network mode: %s", recovery_exc)
     except Exception as exc:
         _update_rotate_status(
             state=ROTATE_STATE_FAILED,
